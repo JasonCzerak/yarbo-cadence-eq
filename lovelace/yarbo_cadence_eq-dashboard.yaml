@@ -1,0 +1,571 @@
+# =============================================================================
+#  YARBO CADENCE EQ DASHBOARD
+# =============================================================================
+#  HOW TO ADD:
+#    Settings -> Dashboards -> + New dashboard -> (name it) -> Open it ->
+#    top-right pencil (Edit) -> 3-dot menu -> "Raw configuration editor" ->
+#    paste EVERYTHING below -> Save.
+#
+#  Uses ONLY built-in cards (no HACS required).
+#
+#  Two views:
+#    - "Yarbo Cadence EQ"  : full 3-column desktop layout
+#    - "Phone"             : single-column, priority-ordered for mobile
+#
+#  Assumes the package (yarbo_cadence_eq.yaml) is installed and entities exist.
+# =============================================================================
+
+title: Yarbo Cadence EQ
+views:
+
+  # ###########################################################################
+  # VIEW 1 — DESKTOP (3 columns)
+  # ###########################################################################
+  - title: Yarbo Cadence EQ
+    path: mowing
+    icon: mdi:robot-mower
+    badges: []
+    cards:
+
+      # =====================================================================
+      # LEFT COLUMN: controls, tuning, cadence
+      # =====================================================================
+      - type: vertical-stack
+        cards:
+
+          # ---- CONTROLS -------------------------------------------------------
+          - type: entities
+            title: Controls
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: input_boolean.yarbocadenceeq_auto_enabled
+                name: 🟢 Mowing (master — expose to HomeKit)
+              - entity: select.yarbo_plan_select
+                name: Plan to run (from Yarbo)
+              - type: divider
+              - entity: input_datetime.yarbocadenceeq_last_cut_completed
+                name: Last cut completed
+              - entity: sensor.yarbocadenceeq_hours_since_last_cut
+                name: Hours since last cut
+
+          # ---- TUNING (grouped sub-sections) ----------------------------------
+          - type: entities
+            title: Tuning
+            show_header_toggle: false
+            entities:
+              - entity: input_text.yarbocadenceeq_device_slug
+                name: Yarbo entity slug
+              - entity: input_number.yarbocadenceeq_min_battery_percent
+                name: Min battery to dispatch
+              - entity: input_boolean.yarbocadenceeq_allow_medium_rtk
+                name: Allow Medium rtk (off = Strong only)
+
+              - type: section
+                label: Cadence
+              - entity: input_number.yarbocadenceeq_cut_interval_hours
+                name: Target interval
+              - entity: input_number.yarbocadenceeq_min_hours_between_cuts
+                name: Min gap
+              - entity: input_number.yarbocadenceeq_active_cut_hours
+                name: Active plan avg run time
+              - entity: input_number.yarbocadenceeq_cut_buffer_hours
+                name: Cut buffer
+
+              - type: section
+                label: Heat / Sun
+              - entity: input_number.yarbocadenceeq_hot_temp_threshold_f
+                name: Hot temp threshold
+              - entity: input_number.yarbocadenceeq_sun_buffer_morning_hours
+                name: Sun buffer (morning)
+              - entity: input_number.yarbocadenceeq_sun_buffer_evening_hours
+                name: Sun buffer (evening)
+              - entity: input_select.yarbocadenceeq_heat_resume_mode
+                name: Heat resume mode
+
+              - type: section
+                label: Yarbo Rain sensor
+              - entity: input_number.yarbocadenceeq_rain_sensor_threshold
+                name: Onboard rain trigger value
+              - entity: input_number.yarbocadenceeq_rain_debounce_seconds
+                name: Rain must persist (s)
+
+              - type: section
+                label: Moisture sensors
+              - entity: input_boolean.yarbocadenceeq_use_moisture
+                name: Use moisture sensors
+              - entity: input_number.yarbocadenceeq_moisture_max_percent
+                name: Max allowed (wet block %)
+              - entity: input_text.yarbocadenceeq_moisture_sensors
+                name: Moisture sensor entity IDs
+
+              - type: section
+                label: Dock GPS match (0.5 m from dock)
+              - entity: input_boolean.yarbocadenceeq_use_dock_coords
+                name: Require dock GPS match
+              - entity: input_number.yarbocadenceeq_dock_latitude
+                name: Dock latitude
+              - entity: input_number.yarbocadenceeq_dock_longitude
+                name: Dock longitude
+              - entity: sensor.yarbocadenceeq_dock_distance_display
+                name: Live distance from dock
+
+      # =====================================================================
+      # MIDDLE COLUMN: countdown, gauges, go/no-go, decision metrics
+      # =====================================================================
+      - type: vertical-stack
+        cards:
+
+          # ---- BIG COUNTDOWN --------------------------------------------------
+          - type: markdown
+            content: >
+              {% set t = states('sensor.yarbocadenceeq_next_cut_prediction') %}
+
+              {% if t in ['unknown','unavailable'] or not t %}
+              ## 🤖 Next cut: _calculating…_
+              {% else %}
+              {% set secs = (as_timestamp(t) - as_timestamp(now())) | int %}
+              {% set running = states('sensor.yarbo_auto_plan_status') in ['Cleaning','Calculating Route','Heading to Area','Waypoint Navigation'] %}
+              {% if running %}
+              # 🟢 Mowing now
+              **{{ states('sensor.yarbocadenceeq_plan_phase') }}** ·
+              battery {{ states('sensor.yarbo_battery') }}%
+              {% elif secs <= 0 %}
+              # ⏱️ Next cut: **due now**
+              {% else %}
+              {% set d = (secs // 86400) %}
+              {% set h = (secs % 86400) // 3600 %}
+              {% set m = (secs % 3600) // 60 %}
+              # ⏱️ Next cut in
+              # {% if d > 0 %}{{ d }}d {% endif %}{{ h }}h {{ m }}m
+              Predicted: **{{ as_timestamp(t) | timestamp_custom('%a %b %-d, %-I:%M %p') }}**
+              {% endif %}
+              {% endif %}
+
+          # ---- GAUGES: moisture + battery ------------------------------------
+          # NOTE: core HA gauges support only 3 colors (red/yellow/green) with
+          # static thresholds — they can't read the dispatch-min slider or show a
+          # 4th shade. Bands here: red <=30, yellow 30-60, green >=60.
+          - type: horizontal-stack
+            cards:
+              - type: gauge
+                entity: sensor.yarbocadenceeq_moisture_max
+                name: Soil (wettest)
+                unit: "%"
+                min: 0
+                max: 100
+                needle: true
+                severity:
+                  green: 0
+                  yellow: 50
+                  red: 60
+              - type: gauge
+                entity: sensor.yarbo_battery
+                name: Battery
+                unit: "%"
+                min: 0
+                max: 100
+                needle: true
+                severity:
+                  red: 0
+                  yellow: 30
+                  green: 60
+
+          # ---- GO / NO-GO (multi-row status) ---------------------------------
+          - type: markdown
+            content: >
+              {% set b = states('sensor.yarbocadenceeq_cut_blocker') %}
+              {% set ok = (b == 'OK') %}
+              ### {{ '✅ OK to cut now' if ok else '⛔ Not cutting' }}
+
+              {% if ok %}
+              **Status:**  Nominal — clear to cut
+              {% elif b in ['unknown','unavailable'] %}
+              **Status:**  updating…
+              {% else %}
+              **Status:**  Blocked
+              {% for r in b.split(', ') %}
+              - {{ r }}
+              {% endfor %}
+              {% endif %}
+
+          # ---- DECISION METRICS ----------------------------------------------
+          - type: entities
+            title: Decision metrics
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - type: section
+                label: Yarbo
+              - entity: binary_sensor.yarbocadenceeq_yarbo_nominal
+                name: ☑️ Yarbo nominal
+              - entity: binary_sensor.yarbo_online
+                name: Online
+              - entity: binary_sensor.yarbocadenceeq_on_dock_sticky
+                name: Home (on dock)
+              - entity: sensor.yarbo_battery
+                name: Battery
+              - entity: sensor.yarbo_rtk_signal
+                name: RTK / GPS signal
+              - entity: binary_sensor.yarbocadenceeq_onboard_rain_detected
+                name: Onboard rain detected
+
+              - type: section
+                label: Moisture
+              - entity: binary_sensor.yarbocadenceeq_is_dry
+                name: ☑️ Moisture nominal
+              - entity: sensor.yarbocadenceeq_wettest_zone
+                name: Wettest zone
+
+              - type: section
+                label: Weather
+              - entity: binary_sensor.yarbocadenceeq_weather_nominal
+                name: ☑️ Weather conditions nominal
+              - entity: sensor.yarbocadenceeq_current_temp_f
+                name: Current temp
+              - entity: sensor.yarbocadenceeq_today_high_f
+                name: Today's high
+              - entity: sensor.yarbocadenceeq_hours_until_rain_display
+                name: Hours until rain
+              - entity: sensor.yarbocadenceeq_rain_clears_display
+                name: Hours until after rain
+              - entity: sensor.yarbocadenceeq_rain_trigger_hours
+                name: Pre-rain trigger threshold
+              - entity: binary_sensor.yarbocadenceeq_rain_detected
+                name: Rain detected now
+              - entity: binary_sensor.yarbocadenceeq_should_cut_ahead_of_rain
+                name: Pre-rain cut due
+
+              - type: section
+                label: Heat / Sun
+              - entity: binary_sensor.yarbocadenceeq_temp_safe_now
+                name: ☑️ Temperature nominal
+              - entity: sensor.yarbocadenceeq_in_sun_window_text
+                name: In direct-sun window
+              - entity: binary_sensor.yarbocadenceeq_heat_paused_state
+                name: Heat-paused
+              - entity: sun.sun
+                name: Sun
+
+      # =====================================================================
+      # RIGHT COLUMN: hardware state, then commands + maintenance
+      # =====================================================================
+      - type: vertical-stack
+        cards:
+
+          # ---- YARBO HARDWARE STATE ------------------------------------------
+          - type: entities
+            title: Yarbo state
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: binary_sensor.yarbo_charging
+                name: Actively charging
+              - entity: sensor.yarbocadenceeq_charging_power_display
+                name: Charging power
+              - entity: sensor.yarbo_head_type
+                name: Head type
+              - entity: sensor.yarbocadenceeq_plan_phase
+                name: Plan phase
+              - entity: sensor.yarbo_auto_plan_pause_status
+                name: Pause reason
+              - entity: sensor.yarbo_recharging_status
+                name: Recharging status
+              - entity: sensor.yarbo_activity
+                name: Activity (awake/standby)
+              - entity: sensor.yarbo_gps_satellites
+                name: GPS satellites
+              - entity: sensor.yarbo_network
+                name: Network (must be Halow)
+              - entity: sensor.yarbo_rain_sensor
+                name: Onboard rain value (live)
+              - entity: sensor.yarbocadenceeq_onboard_rain_mean
+                name: Onboard rain (avg)
+
+          # ---- COMMANDS & MAINTENANCE (merged) -------------------------------
+          - type: entities
+            title: Commands & maintenance
+            show_header_toggle: false
+            entities:
+              - entity: script.yarbocadenceeq_cmd_start
+                name: ▶️ Start (default plan)
+              - entity: script.yarbocadenceeq_cmd_stop
+                name: ⏸️ Stop (freeze in place)
+              - entity: script.yarbocadenceeq_cmd_resume
+                name: ⏯️ Resume
+              - entity: script.yarbocadenceeq_cmd_go_home
+                name: 🏠 Go home (return to charge)
+              - entity: script.yarbocadenceeq_refresh_all
+                name: 🔁 Refresh all Yarbo data
+              - type: divider
+              - entity: input_boolean.yarbocadenceeq_reset_defaults
+                name: ♻️ Reset tuning to recommended (flips back)
+              - entity: input_boolean.yarbocadenceeq_show_homekit_help
+                name: ❓ Show HomeKit setup help
+              - entity: input_boolean.yarbocadenceeq_show_moisture_help
+                name: ❓ Show moisture setup help
+
+          # ---- HOMEKIT HELP (toggled above) ----------------------------------
+          - type: conditional
+            conditions:
+              - entity: input_boolean.yarbocadenceeq_show_homekit_help
+                state: "on"
+            card:
+              type: markdown
+              content: >
+                ### Expose these to HomeKit
+
+                Add exactly these entity IDs to the HomeKit integration's include
+                filter. Scripts show up in the Home app as **buttons**; the master
+                shows up as a **switch**.
+
+                **Master switch:**
+
+                - `input_boolean.yarbocadenceeq_auto_enabled` — turns the whole automation on/off
+
+                **Commands:**
+
+                - `script.yarbocadenceeq_cmd_start` — start a cut
+                - `script.yarbocadenceeq_cmd_stop` — pause / freeze in place
+                - `script.yarbocadenceeq_cmd_resume` — resume
+                - `script.yarbocadenceeq_cmd_go_home` — return to dock
+                - `script.yarbocadenceeq_refresh_all` — refresh all Yarbo data
+
+                Leave everything else out of HomeKit — the sensors and tuning helpers
+                don't need to be exposed.
+
+          # ---- MOISTURE HELP (toggled above) ---------------------------------
+          - type: conditional
+            conditions:
+              - entity: input_boolean.yarbocadenceeq_show_moisture_help
+                state: "on"
+            card:
+              type: markdown
+              content: >
+                ### Moisture sensor setup
+
+                The cut is gated on soil moisture. Configure it for **however many
+                sensors you have (0, 1, 3, 5…)**:
+
+                1. **No soil sensors?** Turn **Use moisture sensors** OFF. Moisture
+                will never block a cut.
+
+                2. **Have sensors?** Leave it ON and fill **Moisture sensor entity
+                IDs** with a **comma-separated** list of their entity IDs, e.g.
+                `sensor.soil_1, sensor.soil_2, sensor.soil_3`.
+
+                **Finding the IDs:** Settings → Devices & Services → your sensor
+                gateway (e.g. Ecowitt) → click the device → each soil-moisture entity
+                shows its `sensor.…` ID. Or Developer Tools → States, filter "soil".
+
+                **How it gates:** the package takes the **wettest** of the listed
+                sensors and blocks if it's at/above the *Max allowed* threshold.
+                Unavailable sensors are skipped. **If the gate is ON but every listed
+                sensor is unavailable, the cut is BLOCKED and you get a notification** —
+                moisture is treated as a primary safety gate, not a soft signal.
+
+  # ###########################################################################
+  # VIEW 2 — PHONE (single column, priority-ordered)
+  # ###########################################################################
+  - title: Phone
+    path: phone
+    icon: mdi:cellphone
+    badges: []
+    cards:
+
+      # 1) What's happening / when -------------------------------------------
+      - type: markdown
+        content: >
+          {% set t = states('sensor.yarbocadenceeq_next_cut_prediction') %}
+
+          {% if t in ['unknown','unavailable'] or not t %}
+          ## 🤖 Next cut: _calculating…_
+          {% else %}
+          {% set secs = (as_timestamp(t) - as_timestamp(now())) | int %}
+          {% set running = states('sensor.yarbo_auto_plan_status') in ['Cleaning','Calculating Route','Heading to Area','Waypoint Navigation'] %}
+          {% if running %}
+          # 🟢 Mowing now
+          **{{ states('sensor.yarbocadenceeq_plan_phase') }}** · battery {{ states('sensor.yarbo_battery') }}%
+          {% elif secs <= 0 %}
+          # ⏱️ Next cut: **due now**
+          {% else %}
+          {% set d = (secs // 86400) %}
+          {% set h = (secs % 86400) // 3600 %}
+          {% set m = (secs % 3600) // 60 %}
+          # ⏱️ Next cut in {% if d > 0 %}{{ d }}d {% endif %}{{ h }}h {{ m }}m
+          Predicted: **{{ as_timestamp(t) | timestamp_custom('%a %b %-d, %-I:%M %p') }}**
+          {% endif %}
+          {% endif %}
+
+      # 2) Go / No-Go with reasons -------------------------------------------
+      - type: markdown
+        content: >
+          {% set b = states('sensor.yarbocadenceeq_cut_blocker') %}
+          {% set ok = (b == 'OK') %}
+          ### {{ '✅ OK to cut now' if ok else '⛔ Not cutting' }}
+
+          {% if ok %}
+          **Status:**  Nominal — clear to cut
+          {% elif b in ['unknown','unavailable'] %}
+          **Status:**  updating…
+          {% else %}
+          **Status:**  Blocked
+          {% for r in b.split(', ') %}
+          - {{ r }}
+          {% endfor %}
+          {% endif %}
+
+      # 3) Gauges ------------------------------------------------------------
+      - type: horizontal-stack
+        cards:
+          - type: gauge
+            entity: sensor.yarbocadenceeq_moisture_max
+            name: Soil (wettest)
+            unit: "%"
+            min: 0
+            max: 100
+            needle: true
+            severity:
+              green: 0
+              yellow: 50
+              red: 60
+          - type: gauge
+            entity: sensor.yarbo_battery
+            name: Battery
+            unit: "%"
+            min: 0
+            max: 100
+            needle: true
+            severity:
+              red: 0
+              yellow: 30
+              green: 60
+
+      # 4) Controls ----------------------------------------------------------
+      - type: entities
+        title: Controls
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: input_boolean.yarbocadenceeq_auto_enabled
+            name: 🟢 Mowing (master)
+          - entity: select.yarbo_plan_select
+            name: Plan to run
+          - entity: input_datetime.yarbocadenceeq_last_cut_completed
+            name: Last cut completed
+
+      # 5) Commands ----------------------------------------------------------
+      - type: entities
+        title: Commands
+        show_header_toggle: false
+        entities:
+          - entity: script.yarbocadenceeq_cmd_start
+            name: ▶️ Start (default plan)
+          - entity: script.yarbocadenceeq_cmd_stop
+            name: ⏸️ Stop (freeze in place)
+          - entity: script.yarbocadenceeq_cmd_resume
+            name: ⏯️ Resume
+          - entity: script.yarbocadenceeq_cmd_go_home
+            name: 🏠 Go home (return to charge)
+          - entity: script.yarbocadenceeq_refresh_all
+            name: 🔁 Refresh all Yarbo data
+
+      # 6) Key hardware state (compact) --------------------------------------
+      - type: entities
+        title: Yarbo state
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: binary_sensor.yarbo_online
+            name: Online
+          - entity: binary_sensor.yarbocadenceeq_on_dock_sticky
+            name: Home (on dock)
+          - entity: sensor.yarbo_battery
+            name: Battery
+          - entity: binary_sensor.yarbo_charging
+            name: Actively charging
+          - entity: sensor.yarbo_recharging_status
+            name: Recharging status
+          - entity: sensor.yarbo_rtk_signal
+            name: RTK / GPS signal
+          - entity: sensor.yarbocadenceeq_plan_phase
+            name: Plan phase
+
+      # 7) Decision metrics --------------------------------------------------
+      - type: entities
+        title: Decision metrics
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - type: section
+            label: Moisture
+          - entity: binary_sensor.yarbocadenceeq_is_dry
+            name: ☑️ Moisture nominal
+          - entity: sensor.yarbocadenceeq_wettest_zone
+            name: Wettest zone
+          - type: section
+            label: Weather
+          - entity: binary_sensor.yarbocadenceeq_weather_nominal
+            name: ☑️ Weather conditions nominal
+          - entity: sensor.yarbocadenceeq_current_temp_f
+            name: Current temp
+          - entity: sensor.yarbocadenceeq_hours_until_rain_display
+            name: Hours until rain
+          - entity: sensor.yarbocadenceeq_rain_clears_display
+            name: Hours until after rain
+          - entity: binary_sensor.yarbocadenceeq_rain_detected
+            name: Rain detected now
+          - entity: binary_sensor.yarbocadenceeq_should_cut_ahead_of_rain
+            name: Pre-rain cut due
+          - type: section
+            label: Heat / Sun
+          - entity: binary_sensor.yarbocadenceeq_temp_safe_now
+            name: ☑️ Temperature nominal
+          - entity: sensor.yarbocadenceeq_in_sun_window_text
+            name: In direct-sun window
+          - entity: binary_sensor.yarbocadenceeq_heat_paused_state
+            name: Heat-paused
+
+      # 8) Cadence + Tuning (bottom — least used on phone) -------------------
+      - type: entities
+        title: Cadence
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: input_number.yarbocadenceeq_cut_interval_hours
+            name: Target interval
+          - entity: input_number.yarbocadenceeq_min_hours_between_cuts
+            name: Min gap
+          - entity: input_number.yarbocadenceeq_cut_buffer_hours
+            name: Cut buffer
+
+      - type: entities
+        title: Tuning
+        show_header_toggle: false
+        entities:
+          - entity: input_number.yarbocadenceeq_min_battery_percent
+            name: Min battery to dispatch
+          - entity: input_number.yarbocadenceeq_active_cut_hours
+            name: Active plan avg run time
+          - entity: input_number.yarbocadenceeq_hot_temp_threshold_f
+            name: Hot temp threshold
+          - entity: input_number.yarbocadenceeq_sun_buffer_morning_hours
+            name: Sun buffer (morning)
+          - entity: input_number.yarbocadenceeq_sun_buffer_evening_hours
+            name: Sun buffer (evening)
+          - entity: input_boolean.yarbocadenceeq_allow_medium_rtk
+            name: Allow Medium rtk (off = Strong only)
+          - type: section
+            label: Moisture sensors
+          - entity: input_boolean.yarbocadenceeq_use_moisture
+            name: Use moisture sensors
+          - entity: input_number.yarbocadenceeq_moisture_max_percent
+            name: Max allowed (wet block %)
+          - entity: input_text.yarbocadenceeq_moisture_sensors
+            name: Moisture sensor entity IDs
+          - type: section
+            label: Dock GPS match (0.5 m from dock)
+          - entity: input_boolean.yarbocadenceeq_use_dock_coords
+            name: Require dock GPS match
+          - entity: sensor.yarbocadenceeq_dock_distance_display
+            name: Live distance from dock
