@@ -1720,9 +1720,18 @@ automation:
   # on a definitive departure. This is what fixes the overnight "not on dock"
   # false-negative — charging going silent is NOT treated as leaving.
   #
-  # SET ON: recharging reaches Charging/Verifying (only happens on the dock).
+  # SET ON either signal (OR'd):
+  #   (a) recharging reaches Charging/Verifying — happens only on the dock, and
+  #       works even when RTK is poor; but at a full battery it's true only during
+  #       the brief battery-care top-ups (~98%->100%), silent the rest of the time.
+  #   (b) GPS says we're on the dock pad — RTK Strong AND within 0.5 m of the saved
+  #       dock point, and NOT mid-plan. The always-on signal that fixes the
+  #       "sitting at 100%, recharging idle, but clearly home" false-negative.
+  # Either one latches "docked"; the /5 self-heal re-asserts while still home.
+  # (dock_distance_m goes 'unavailable' when the robot is asleep/not reporting GPS;
+  # that simply drops the GPS path and falls back to the charging path + self-heal.)
   - id: yarbocadenceeq_dock_latch_set
-    alias: "YarboCadenceEQ: Dock latch — set on charge"
+    alias: "YarboCadenceEQ: Dock latch — set on charge or GPS"
     trigger:
       - platform: state
         entity_id: sensor.yarbocadenceeq_recharging_status
@@ -1730,19 +1739,30 @@ automation:
       - platform: state
         entity_id: sensor.yarbocadenceeq_recharging_status
         to: "Verifying"
+      # RTK locking to Strong while parked is the moment GPS becomes trustworthy.
+      - platform: state
+        entity_id: sensor.yarbocadenceeq_rtk_signal
+        to: "Strong"
       - platform: homeassistant
         event: start
-      # Self-heal: while recharging holds Charging/Verifying there's no new edge,
-      # so re-assert the latch on a timer in case it ever got cleared while still
-      # on the dock. turn_on is idempotent.
+      # Self-heal: re-assert every 5 min while either signal still says home
+      # (turn_on is idempotent). This alone recovers a latch stuck off at 100%.
       - platform: time_pattern
         minutes: "/5"
     condition:
-      - condition: state
-        entity_id: sensor.yarbocadenceeq_recharging_status
-        state:
-          - "Charging"
-          - "Verifying"
+      - condition: template
+        value_template: >
+          {% set rech = states('sensor.yarbocadenceeq_recharging_status') %}
+          {% set on_charger = rech in ['Charging','Verifying'] %}
+          {% set sig = states('sensor.yarbocadenceeq_rtk_signal') %}
+          {% set dd = states('sensor.yarbocadenceeq_dock_distance_m') %}
+          {% set ap = states('sensor.yarbocadenceeq_auto_plan_status') %}
+          {% set ap_active = ap in ['Cleaning','Calculating Route','Heading to Area','Waypoint Navigation'] %}
+          {% set at_dock = sig == 'Strong'
+                           and dd not in ['unknown','unavailable','none']
+                           and (dd | float(9999)) <= 0.5
+                           and not ap_active %}
+          {{ on_charger or at_dock }}
     action:
       - service: input_boolean.turn_on
         target:
